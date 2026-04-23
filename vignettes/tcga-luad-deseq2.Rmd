@@ -1,0 +1,63 @@
+---
+title: "TCGA-LUAD workflow with luadtools"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{TCGA-LUAD workflow with luadtools}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(luadtools)
+```
+
+This vignette shows an end-to-end TCGA-LUAD analysis using package functions.
+
+## 1) Download and prepare TCGA-LUAD data
+
+```{r download, eval = FALSE}
+# Network-heavy: disable by default in vignette builds
+se <- tcga_luad_download_prepare(
+  sample_types = c("Primary Tumor", "Solid Tissue Normal"),
+  project = "TCGA-LUAD"
+)
+```
+
+## 2) Differential expression analysis
+
+```{r deseq, eval = FALSE}
+out <- deseq2_tumor_vs_normal(se)
+res <- out$res
+vsd <- out$vsd
+```
+
+## 3) Visualizations
+
+```{r plots, eval = FALSE}
+plot_pca(vsd, group_col = "sample_type")
+plot_volcano(res,
+  title = "TCGA-LUAD: Tumor vs Normal",
+  subtitle = "Biomarcadores transcriptómicos"
+)
+plot_topvar_heatmap(vsd, group = out$coldata$sample_type, top_n = 20)
+```
+
+## 4) KEGG enrichment
+
+```{r kegg, eval = FALSE}
+kegg <- kegg_enrichment_from_deseq(
+  res,
+  padj_cutoff = 0.05,
+  lfc_cutoff = 1,
+  direction = "up"
+)
+
+kegg$dotplot
+kegg$barplot
+```
+
+## Notes
+
+- Keep network-heavy operations disabled for automated checks.
+- Consider local caching or project-level dependency management (`renv`) for reproducibility.

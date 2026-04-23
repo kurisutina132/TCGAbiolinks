@@ -1,0 +1,543 @@
+---
+title: "TCGAbiolinks"
+author: "Cristy Medina Armijo"
+date: "2026-01-21"
+output: 
+   html_document:
+   theme: united
+---
+
+
+*Análisis RNA-seq en cáncer de pulmón (TCGA-LUAD)*
+
+Este ejercicio integra análisis bioinformático real con interpretación biológica, usando datos públicos de adenocarcinoma pulmonar (LUAD) del proyecto TCGA.
+
+***Objetivo del ejercicio***
+
+Identificar biomarcadores transcriptómicos Tumor vs Normal
+
+Aplicar un pipeline estándar de control de calidad + DESeq2
+
+Visualizar resultados mediante PCA, Volcano y Heatmap
+
+Interpretar los genes en el contexto de oncogénesis pulmonar
+
+Conectar biomarcadores con KEGG y Hallmarks of Cancer
+
+***Datos***
+
+Fuente: TCGA (The Cancer Genome Atlas)
+
+Proyecto: TCGA-LUAD
+
+Tipo de datos: RNA-seq (STAR – Counts)
+
+Muestras:
+
+Primary Tumor
+
+Solid Tissue Normal
+
+***Control de calidad (conceptual)***
+
+
+Filtrado de genes con baja expresión (ruido técnico)
+
+Normalización por tamaño de biblioteca
+
+Transformación de varianza (VST)
+
+Evitar mezclar identificadores (ENSG vs SYMBOL)
+
+En TCGA, los objetos pueden traer símbolos génicos automáticamente. Siempre verificar rownames()
+
+
+*Preparando datos*
+
+``````{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+
+# ======================================================
+# Librerías
+# ======================================================
+
+
+library(TCGAbiolinks)
+library(SummarizedExperiment)
+library(DESeq2)
+library(apeglm)
+library(dplyr)
+library(tibble)
+library(pheatmap)
+library(pheatmap)
+library(ggplot2)
+library(DT)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(EnhancedVolcano)
+
+# ======================================================
+# Descarga y preparación de datos
+# ======================================================
+
+query <- GDCquery(
+  project = "TCGA-LUAD",
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  workflow.type = "STAR - Counts",
+  sample.type = c("Primary Tumor", "Solid Tissue Normal")
+)
+
+GDCdownload(query)
+luad_data <- GDCprepare(query)
+
+# Extraer matriz de conteos y metadatos
+counts <- assay(luad_data)
+metadata <- colData(luad_data)
+
+# ======================================================
+# 3 DESeq2: objeto y análisis
+# ======================================================
+
+dds <- DESeqDataSetFromMatrix(
+  countData = counts,
+  colData = metadata,
+  design = ~ sample_type
+)
+
+# Filtrar genes con pocos conteos
+dds <- dds[rowSums(counts(dds)) > 10, ]
+
+# Analizar
+dds <- DESeq(dds)
+
+dds$sample_type <- factor(
+  dds$sample_type,
+  levels = c("Solid Tissue Normal", "Primary Tumor"),
+  labels = c("Normal", "Tumor")
+)
+
+design(dds) <- ~ sample_type
+dds <- DESeq(dds)
+
+resultsNames(dds)
+
+
+# LFC shrinkage
+res <- lfcShrink(
+  dds,
+  coef = "sample_type_Tumor_vs_Normal",
+  type = "apeglm"
+)
+
+
+# ======================================================
+# 4 Seleccionar top genes
+# ======================================================
+
+res_sig <- res %>%
+  as.data.frame() %>%
+  rownames_to_column("gene") %>%
+  filter(padj < 0.05 & abs(log2FoldChange) > 1)
+
+top_genes <- res_sig %>%
+  arrange(padj) %>%
+  slice(1:20) %>%
+  pull(gene)
+
+
+
+
+```
+```{r}
+#Tabla de genes diferencialmente expresados
+
+#install.packages("DT")
+#library(DT)
+
+res_df <- res %>%
+as.data.frame() %>%
+rownames_to_column("gene") %>%
+arrange(padj)
+
+
+DT::datatable(
+res_df,
+extensions = c('Buttons', 'Scroller'),
+options = list(
+dom = 'Bfrtip',
+buttons = c('copy', 'csv', 'excel'),
+scrollX = TRUE,
+pageLength = 10
+),
+caption = "Genes diferencialmente expresados – TCGA LUAD"
+)
+
+```
+
+
+
+```{r}
+#Volcano plot (Tumor vs Normal)
+EnhancedVolcano(
+res,
+lab = rownames(res),
+x = 'log2FoldChange',
+y = 'padj',
+pCutoff = 0.05,
+FCcutoff = 1,
+title = 'TCGA-LUAD: Tumor vs Normal',
+subtitle = 'Biomarcadores transcriptómicos',
+labSize = 3,
+legendPosition = 'right'
+)
+```
+
+```{r}
+vsd <- vst(dds, blind = FALSE)
+
+
+pca_data <- plotPCA(vsd, intgroup = "sample_type", returnData = TRUE)
+percentVar <- round(100 * attr(pca_data, "percentVar"))
+
+
+ggplot(pca_data, aes(PC1, PC2, color = sample_type)) +
+geom_point(size = 3, alpha = 0.8) +
+xlab(paste0("PC1: ", percentVar[1], "% varianza")) +
+ylab(paste0("PC2: ", percentVar[2], "% varianza")) +
+scale_color_manual(values = c("Normal" = "#4575B4", "Tumor" = "#D73027")) +
+theme_bw(base_size = 14) 
+```
+
+
+```{r}
+ggtitle("PCA RNA-seq – TCGA LUAD")
+```
+
+```{r} 
+# Transformación para visualización
+vsd <- vst(dds, blind = FALSE)
+
+# Seleccionar top 20 genes por varianza
+gene_vars <- apply(assay(vsd), 1, var, na.rm = TRUE)
+top_genes <- names(sort(gene_vars, decreasing = TRUE))[1:20]
+
+# Extraer matriz
+mat_top <- assay(vsd)[top_genes, , drop = FALSE]
+
+# Escalar por fila (Z-score)
+mat_top_scaled <- t(scale(t(mat_top)))
+
+# Reemplazar NA si aparecen (muy raro, pero seguro)
+mat_top_scaled[is.na(mat_top_scaled)] <- 0
+
+# Anotación de muestras
+annotation <- data.frame(
+  SampleType = colData(dds)$sample_type
+)
+rownames(annotation) <- colnames(mat_top_scaled)
+
+```
+
+
+
+
+
+```{r}
+# ======================================================
+# 5  Preparar matriz para heatmap
+# ======================================================
+
+# Usamos IDs originales Ensembl (más robusto)
+# Quitar versión si quieres, opcional:
+#rownames(vsd) <- gsub("\\..*", "", rownames(dds))  # opcional
+#mat_top <- assay(vsd)[top_genes, , drop = FALSE]
+
+# Escalar por fila (Z-score)
+mat_top_scaled <- t(scale(t(mat_top)))
+
+
+# ======================================================
+# 6 Preparar anotación de columnas
+# ======================================================
+
+annotation <- data.frame(
+  SampleType = metadata$sample_type
+)
+rownames(annotation) <- colnames(mat_top_scaled)
+
+ann_colors <- list(
+  SampleType = c(
+    "Primary Tumor" = "#E41A1C",
+    "Solid Tissue Normal" = "#377EB8"
+  )
+)
+
+# ======================================================
+# 7 Heatmap 
+# ======================================================
+
+#revisando errores 
+head(top_genes)
+head(rownames(vsd))
+
+# chequeo lógico
+all(top_genes %in% rownames(vsd))
+
+# ver cuáles fallan
+setdiff(top_genes, rownames(vsd))[1:10]
+
+gene_annot <- rowData(luad_data)
+
+head(gene_annot)
+
+#Crear tabla Ensembl → Symbol
+gene_map <- data.frame(
+  ensembl = gsub("\\..*", "", gene_annot$gene_id),
+  symbol  = gene_annot$gene_name
+)
+
+#Convertir top_genes a SYMBOL
+
+top_genes_ensembl <- gsub("\\..*", "", top_genes)
+
+top_genes_symbol <- gene_map$symbol[
+  match(top_genes_ensembl, gene_map$ensembl)
+]
+
+top_genes_symbol
+
+#Limpiar NAs (normal en TCGA)
+
+top_genes_symbol <- top_genes_symbol[!is.na(top_genes_symbol)]
+length(top_genes_symbol)
+# EXTRAER MATRIZ
+
+#mat_top <- assay(vsd)[top_genes_symbol, , drop = FALSE]
+
+#(NA/NaN en heatmap) — prevención
+
+vars <- apply(mat_top, 1, var)
+mat_top <- mat_top[vars > 0, ]
+
+mat_top_scaled <- t(scale(t(mat_top)))
+
+annotation <- data.frame(
+  SampleType = colData(dds)$sample_type
+)
+rownames(annotation) <- colnames(mat_top_scaled)
+
+ann_colors <- list(
+  SampleType = c(
+    "Tumor" = "#D73027",
+    "Normal" = "#4575B4"
+  )
+)
+
+pheatmap(
+  mat_top_scaled,
+  annotation_col = annotation,
+  annotation_colors = ann_colors,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  show_rownames = TRUE,
+  show_colnames = FALSE,
+  fontsize_row = 9,
+  border_color = NA,
+  color = colorRampPalette(c("#313695", "white", "#A50026"))(100),
+  main = "Top Biomarcadores Transcriptómicos – TCGA LUAD"
+)
+
+dim(mat_top_scaled)
+
+# Opción robusta: top genes por varianza
+vars <- apply(assay(vsd), 1, var)
+top_genes <- names(sort(vars, decreasing = TRUE))[1:20]
+
+mat_top <- assay(vsd)[top_genes, ]
+mat_top_scaled <- t(scale(t(mat_top)))
+
+annotation <- data.frame(
+  SampleType = colData(dds)$sample_type
+)
+rownames(annotation) <- colnames(mat_top_scaled)
+
+ann_colors <- list(
+  SampleType = c(
+    "Tumor" = "#D73027",
+    "Normal" = "#4575B4"
+  )
+)
+
+pheatmap(
+  mat_top_scaled,
+  annotation_col = annotation,
+  annotation_colors = ann_colors,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  show_rownames = TRUE,
+  show_colnames = FALSE,
+  fontsize_row = 9,
+  border_color = NA,
+  color = colorRampPalette(c("#313695", "white", "#A50026"))(100),
+  main = "Top Genes por Varianza – TCGA LUAD"
+)
+```
+
+
+```{r}
+#Heatmap de biomarcadores
+
+mat_top <- assay(vsd)[top_genes, ]
+
+
+mat_top_scaled <- t(scale(t(mat_top)))
+
+
+annotation <- data.frame(sample_type = colData(dds)$sample_type)
+rownames(annotation) <- colnames(mat_top_scaled)
+
+
+pheatmap(
+mat_top_scaled,
+annotation_col = annotation,
+cluster_rows = TRUE,
+cluster_cols = TRUE,
+show_colnames = FALSE,
+fontsize_row = 8,
+border_color = NA,
+main = "Top 20 biomarcadores – TCGA LUAD"
+)
+```
+
+**KEGG**
+
+
+```{r}
+# Genes up-regulated (Tumor > Normal)
+genes_up <- res_sig %>%
+  dplyr::filter(log2FoldChange > 1) %>%
+  dplyr::pull(gene)
+
+# Genes down-regulated (Tumor < Normal)
+genes_down <- res_sig %>%
+  dplyr::filter(log2FoldChange < -1) %>%
+  dplyr::pull(gene)
+
+length(genes_up)
+length(genes_down)
+
+```
+
+
+
+```{r}
+
+
+#library(clusterProfiler)
+#library(org.Hs.eg.db)
+
+# Genes significativos desde DESeq2
+genes_sig <- res_sig$gene
+
+# Quitar versión ENSG (muy importante)
+genes_sig_clean <- gsub("\\..*", "", genes_sig)
+
+# Convertir ENSEMBL → ENTREZ
+genes_entrez <- bitr(
+  genes_sig_clean,
+  fromType = "ENSEMBL",
+  toType   = "ENTREZID",
+  OrgDb    = org.Hs.eg.db
+)
+
+head(genes_entrez)
+
+#Enriquecimiento KEGG
+
+ekk <- enrichKEGG(
+  gene         = genes_entrez$ENTREZID,
+  organism     = "hsa",
+  pvalueCutoff = 0.05
+)
+
+
+
+#Visualización
+
+dotplot(ekk, showCategory = 15) +
+  ggtitle("KEGG enrichment – TCGA LUAD") +
+  theme_bw(base_size = 14)
+
+head(genes_up)
+genes_up_ens <- gsub("\\..*", "", genes_up)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+entrez_up <- bitr(
+  genes_up_ens,
+  fromType = "ENSEMBL",
+  toType   = "ENTREZID",
+  OrgDb    = org.Hs.eg.db
+)
+
+nrow(entrez_up)
+length(unique(genes_up_ens))
+
+```
+
+
+```{r}
+kegg_up <- enrichKEGG(
+  gene         = entrez_up$ENTREZID,
+  organism     = "hsa",
+  pvalueCutoff = 0.05
+)
+
+dotplot(kegg_up, showCategory = 15) +
+  ggtitle("KEGG enrichment – Genes upregulados (LUAD)")
+
+```
+
+
+```{r kegg-table, echo=FALSE}
+#library(DT)
+kegg_df <- as.data.frame(ekk)
+
+datatable(
+  kegg_df %>%
+    dplyr::arrange(p.adjust) %>%
+    dplyr::select(
+      ID, Description, GeneRatio, p.adjust, Count
+    ) %>%
+    head(15),
+  options = list(
+    pageLength = 10,
+    scrollX = TRUE
+  ),
+  caption = "Top 15 rutas KEGG enriquecidas (TCGA-LUAD)"
+)
+```
+
+```{r kegg-barplot, fig.height=6}
+barplot(
+  ekk,
+  showCategory = 15,
+  title = "Enriquecimiento KEGG – TCGA-LUAD"
+)
+```
+
+```{r kegg-categories, echo=FALSE}
+kegg_df %>%
+  dplyr::count(category, sort = TRUE)
+```
+
+El análisis de enriquecimiento KEGG reveló una sobrerrepresentación significativa de rutas asociadas a señalización celular, interacción ligando-receptor, metabolismo y procesos inmunes. Destacan particularmente rutas relacionadas con señalización PI3K-Akt, interacción citoquina-receptor y metabolismo de lípidos, procesos ampliamente implicados en la progresión tumoral del adenocarcinoma pulmonar.
+
+
+
+

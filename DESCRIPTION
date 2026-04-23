@@ -1,0 +1,29 @@
+Package: luadtools
+Title: TCGA-LUAD RNA-Seq Analysis Helpers
+Version: 0.0.0.9000
+Authors@R: 
+    person(given = "Cristy", family = "Medina Armijo", role = c("aut", "cre"), email = "cristy@example.com")
+Description: Reusable helpers to download TCGA-LUAD RNA-seq counts, run DESeq2 tumor-vs-normal analyses, and create PCA, volcano, heatmap, and KEGG enrichment outputs.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Imports:
+    TCGAbiolinks,
+    SummarizedExperiment,
+    DESeq2,
+    apeglm,
+    dplyr,
+    tibble,
+    ggplot2,
+    EnhancedVolcano,
+    pheatmap,
+    clusterProfiler,
+    org.Hs.eg.db
+Suggests:
+    rmarkdown,
+    knitr,
+    DT,
+    testthat
+VignetteBuilder: knitr
+Config/testthat/edition: 3
