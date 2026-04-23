@@ -172,6 +172,9 @@ plot_volcano <- function(
 #' @export
 plot_topvar_heatmap <- function(vsd, group, top_n = 20, ...) {
   mat <- SummarizedExperiment::assay(vsd)
+  if (length(group) != ncol(mat)) {
+    stop("`group` must have length equal to ncol(vsd).", call. = FALSE)
+  }
   vars <- apply(mat, 1, stats::var, na.rm = TRUE)
   top_idx <- utils::head(order(vars, decreasing = TRUE), top_n)
 
